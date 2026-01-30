@@ -213,21 +213,38 @@ def click_next_question_in_modal(page: Page) -> bool:
 
 def get_current_question_id(page: Page) -> str | None:
     """Get the current question ID from the modal header or content."""
+    import re
     try:
         # Try to get from the modal title/header area
         header = page.locator("#modalID1 .cb-dialog-header")
         if header.count() > 0:
             text = header.inner_text()
-            # Extract ID from text like "Question f1bfbed3"
-            if "Question" in text:
-                return text.split("Question")[-1].strip().split()[0]
-        
-        # Fallback: try to find it in the info table
+            # Handle format "Question ID: xxxxxxxx"
+            if "ID:" in text:
+                id_part = text.split("ID:")[-1].strip().split()[0]
+                # Clean any trailing punctuation
+                id_part = re.sub(r'[^a-zA-Z0-9]$', '', id_part)
+                if id_part:
+                    return id_part
+            # Handle format "Question xxxxxxxx" (no "ID:" prefix)
+            elif "Question" in text:
+                id_part = text.split("Question")[-1].strip().split()[0]
+                id_part = re.sub(r'[^a-zA-Z0-9]$', '', id_part)
+                if id_part and id_part != "ID":
+                    return id_part
+
+        # Fallback: try to find 8-char hex ID pattern anywhere in modal
         id_cell = page.locator("#modalID1 .question-detail-info")
         if id_cell.count() > 0:
-            # Look for the question ID pattern (8 hex chars)
-            import re
             text = id_cell.inner_text()
+            match = re.search(r'\b[a-f0-9]{8}\b', text)
+            if match:
+                return match.group()
+
+        # Last resort: check the full modal content for hex ID
+        modal = page.locator("#modalID1")
+        if modal.count() > 0:
+            text = modal.inner_text()
             match = re.search(r'\b[a-f0-9]{8}\b', text)
             if match:
                 return match.group()
