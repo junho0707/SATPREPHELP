@@ -1,0 +1,384 @@
+from __future__ import annotations
+import json
+import os
+import time
+from typing import Literal
+from playwright.sync_api import sync_playwright, Page
+
+Assessment = Literal["SAT", "PSAT/NMSQT & PSAT 10", "PSAT 8/9"]
+Section = Literal["RW", "MATH", "Reading and Writing", "Math"]
+
+ASSESSMENT_VALUE_MAP = {
+    "SAT": "99",
+    "PSAT/NMSQT & PSAT 10": "100",
+    "PSAT 8/9": "102",
+}
+
+SECTION_VALUE_MAP = {
+    "RW": "1",
+    "Reading and Writing": "1",
+    "MATH": "2",
+    "Math": "2",
+}
+
+OUTPUT_DIR = "output"
+IMAGES_DIR = os.path.join(OUTPUT_DIR, "images")
+
+
+def setup_output_dirs():
+    """Create output directories if they don't exist."""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(IMAGES_DIR, exist_ok=True)
+
+
+def get_difficulty_from_bars(page: Page) -> int:
+    """
+    Map difficulty indicator bars to 1, 2, or 3.
+    Counts the number of 'filled' difficulty indicators.
+    """
+    filled_bars = page.locator(
+        "#modalID1 .question-detail-info .difficulty-table-icon .difficulty-indicator.filled"
+    )
+    return filled_bars.count()
+
+
+def capture_figure(page: Page, question_id: str, index: int = 1) -> str | None:
+    """
+    Screenshot a figure element (table/graph) and save it.
+    Returns the relative path to the saved image, or None if capture fails.
+    """
+    try:
+        # Look for figures within the prompt area
+        figures = page.locator("#modalID1 .prompt figure")
+        if figures.count() == 0:
+            return None
+        
+        fig = figures.nth(index - 1)
+        filename = f"{question_id}_{index}.png"
+        filepath = os.path.join(IMAGES_DIR, filename)
+        
+        fig.screenshot(path=filepath)
+        print(f"    📸 Captured figure: {filename}")
+        return os.path.join("images", filename)
+    except Exception as e:
+        print(f"    ⚠ Could not capture figure: {e}")
+        return None
+
+
+def extract_question_data(page: Page, question_id: str) -> dict:
+    """
+    Extract all data from the question detail modal.
+    """
+    modal_selector = "#modalID1"
+    page.wait_for_selector(f"{modal_selector} .cb-dialog-content", timeout=10000)
+    page.wait_for_timeout(500)  # Let content fully render
+
+    question_data = {
+        "question_id": question_id,
+        "assessment": "",
+        "section": "",
+        "domain": "",
+        "skill": "",
+        "difficulty": 0,
+        "prompt_text": "",
+        "question_text": "",
+        "answer_choices": [],
+        "correct_answer": "",
+        "rationale": "",
+        "has_figure": False,
+        "figure_paths": [],
+    }
+
+    # -------------------------
+    # 1) Extract info table data (Assessment, Section, Domain, Skill, Difficulty)
+    # -------------------------
+    info_table_selector = f"{modal_selector} .question-detail-info table tbody tr td"
+    info_cells = page.locator(info_table_selector)
+    
+    if info_cells.count() >= 5:
+        question_data["assessment"] = info_cells.nth(0).inner_text().strip()
+        question_data["section"] = info_cells.nth(1).inner_text().strip()
+        question_data["domain"] = info_cells.nth(2).inner_text().strip()
+        question_data["skill"] = info_cells.nth(3).inner_text().strip()
+        # Difficulty from bar count
+        question_data["difficulty"] = get_difficulty_from_bars(page)
+
+    # -------------------------
+    # 2) Extract prompt (text + optional figure)
+    # -------------------------
+    prompt_selector = f"{modal_selector} .prompt"
+    prompt_element = page.locator(prompt_selector)
+    
+    if prompt_element.count() > 0:
+        # Get all text content from prompt
+        prompt_text_parts = []
+        prompt_paragraphs = prompt_element.locator("p")
+        for i in range(prompt_paragraphs.count()):
+            text = prompt_paragraphs.nth(i).inner_text().strip()
+            if text:
+                prompt_text_parts.append(text)
+        question_data["prompt_text"] = "\n\n".join(prompt_text_parts)
+
+        # Check for and capture figures/tables
+        figures = prompt_element.locator("figure")
+        figure_count = figures.count()
+        if figure_count > 0:
+            question_data["has_figure"] = True
+            for i in range(figure_count):
+                fig_path = capture_figure(page, question_id, i + 1)
+                if fig_path:
+                    question_data["figure_paths"].append(fig_path)
+
+    # -------------------------
+    # 3) Extract question text
+    # -------------------------
+    question_selector = f"{modal_selector} .question"
+    question_element = page.locator(question_selector)
+    if question_element.count() > 0:
+        question_data["question_text"] = question_element.inner_text().strip()
+
+    # -------------------------
+    # 4) Extract answer choices
+    # -------------------------
+    choices_selector = f"{modal_selector} .answer-choices ul li"
+    choices = page.locator(choices_selector)
+    
+    for i in range(choices.count()):
+        choice_text = choices.nth(i).inner_text().strip()
+        question_data["answer_choices"].append(choice_text)
+
+    # -------------------------
+    # 5) Extract correct answer and rationale
+    # -------------------------
+    rationale_selector = f"{modal_selector} .rationale"
+    rationale_element = page.locator(rationale_selector)
+    
+    if rationale_element.count() > 0:
+        # Get correct answer (e.g., "Correct Answer: A")
+        correct_answer_el = rationale_element.locator("p.cb-font-weight-bold")
+        if correct_answer_el.count() > 0:
+            correct_text = correct_answer_el.first.inner_text().strip()
+            # Extract just the letter (e.g., "A" from "Correct Answer: A")
+            if ":" in correct_text:
+                question_data["correct_answer"] = correct_text.split(":")[-1].strip()
+
+        # Get full rationale text
+        rationale_div = rationale_element.locator("div").last
+        if rationale_div.count() > 0:
+            question_data["rationale"] = rationale_div.inner_text().strip()
+
+    return question_data
+
+
+def close_modal(page: Page):
+    """Close the question detail modal."""
+    close_btn = page.locator("#modalID1 button[aria-label='Close']")
+    if close_btn.count() > 0:
+        close_btn.click()
+        page.wait_for_timeout(300)
+
+
+def has_next_question_in_modal(page: Page) -> bool:
+    """Check if Next button exists inside the modal and is clickable."""
+    next_btn = page.locator("#modalID1 .footer div.cb-align-right button:has-text('Next')")
+    if next_btn.count() == 0:
+        return False
+    return not next_btn.is_disabled()
+
+
+def click_next_question_in_modal(page: Page) -> bool:
+    """Click the Next button inside modal to go to next question. Returns True if successful."""
+    try:
+        next_btn = page.locator("#modalID1 .footer div.cb-align-right button:has-text('Next')")
+        if next_btn.count() > 0 and not next_btn.is_disabled():
+            next_btn.click()
+            page.wait_for_timeout(800)  # Wait for next question to load
+            return True
+    except Exception as e:
+        print(f"⚠ Could not click Next in modal: {e}")
+    return False
+
+
+def get_current_question_id(page: Page) -> str | None:
+    """Get the current question ID from the modal header or content."""
+    try:
+        # Try to get from the modal title/header area
+        header = page.locator("#modalID1 .cb-dialog-header")
+        if header.count() > 0:
+            text = header.inner_text()
+            # Extract ID from text like "Question f1bfbed3"
+            if "Question" in text:
+                return text.split("Question")[-1].strip().split()[0]
+        
+        # Fallback: try to find it in the info table
+        id_cell = page.locator("#modalID1 .question-detail-info")
+        if id_cell.count() > 0:
+            # Look for the question ID pattern (8 hex chars)
+            import re
+            text = id_cell.inner_text()
+            match = re.search(r'\b[a-f0-9]{8}\b', text)
+            if match:
+                return match.group()
+    except Exception:
+        pass
+    return None
+
+
+def run_scraper(
+    *,
+    url: str = "https://satsuiteeducatorquestionbank.collegeboard.org/digital/search",
+    assessment: Assessment = "SAT",
+    section: Section = "RW",
+    headless: bool = False,
+    slow_mo_ms: int = 150,
+    timeout_ms: int = 20_000,
+    max_questions: int | None = None,  # Limit for testing (None = all)
+) -> list[dict]:
+    """
+    Full scraper flow:
+    1) Search with filters
+    2) Click first question to open modal
+    3) Extract data, click Next inside modal, repeat
+    4) Save to JSON
+    """
+    setup_output_dirs()
+    
+    assessment_value = ASSESSMENT_VALUE_MAP[assessment]
+    section_value = SECTION_VALUE_MAP[section]
+
+    select_assessment = r"select#apricot_select_\:r0\:"
+    select_section = r"select#apricot_select_\:r1\:"
+    all_domain_checkbox_inputs = "input[id^='checkbox-'][type='checkbox']"
+    search_btn = "button.cb-btn.cb-btn-yellow"
+
+    all_questions = []
+    total_processed = 0
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless, slow_mo=slow_mo_ms)
+        context = browser.new_context(viewport={"width": 1280, "height": 900})
+        page = context.new_page()
+        page.set_default_timeout(timeout_ms)
+
+        # -------------------------
+        # 1) Search page setup
+        # -------------------------
+        print("🚀 Starting scraper...")
+        page.goto(url, wait_until="domcontentloaded")
+        page.wait_for_selector(select_assessment)
+        page.select_option(select_assessment, value=assessment_value)
+
+        page.wait_for_selector(select_section)
+        page.select_option(select_section, value=section_value)
+        page.wait_for_timeout(400)
+
+        boxes = page.locator(all_domain_checkbox_inputs)
+        for i in range(boxes.count()):
+            try:
+                boxes.nth(i).check()
+            except Exception:
+                boxes.nth(i).click(force=True)
+
+        page.wait_for_selector(search_btn)
+        page.wait_for_timeout(800)
+
+        for _ in range(40):
+            if not page.locator(search_btn).is_disabled():
+                break
+            page.wait_for_timeout(200)
+
+        page.click(search_btn)
+        print("🔍 Search submitted...")
+        page.wait_for_timeout(600)
+
+        # Wait for results table
+        page.wait_for_selector("table.cb-table-react", timeout=timeout_ms)
+        page.wait_for_timeout(500)
+
+        # -------------------------
+        # 2) Click first question to open modal
+        # -------------------------
+        first_question_btn = page.locator("button.view-question-button").first
+        first_question_id = first_question_btn.get_attribute("id")
+        print(f"📖 Opening first question: {first_question_id}")
+        first_question_btn.click()
+        
+        # Wait for modal to fully load
+        page.wait_for_selector("#modalID1 .cb-dialog-content", timeout=timeout_ms)
+        page.wait_for_timeout(500)
+
+        # -------------------------
+        # 3) Loop: extract data, click Next in modal
+        # -------------------------
+        while True:
+            # Check if we've hit the limit
+            if max_questions is not None and total_processed >= max_questions:
+                print(f"\n🛑 Reached limit of {max_questions} questions")
+                break
+
+            # Get current question ID
+            question_id = get_current_question_id(page)
+            if not question_id:
+                # Fallback: use counter-based ID
+                question_id = f"unknown_{total_processed + 1}"
+            
+            total_processed += 1
+            print(f"\n[{total_processed}] Processing question: {question_id}")
+
+            # Extract data from modal
+            try:
+                question_data = extract_question_data(page, question_id)
+                all_questions.append(question_data)
+                print(f"    ✓ Extracted: {question_data['domain']} / {question_data['skill']}")
+                if question_data["has_figure"]:
+                    print(f"    📊 Has {len(question_data['figure_paths'])} figure(s)")
+            except Exception as e:
+                print(f"    ❌ Error extracting data: {e}")
+                all_questions.append({
+                    "question_id": question_id,
+                    "error": str(e)
+                })
+
+            # Try to go to next question via modal Next button
+            if has_next_question_in_modal(page):
+                click_next_question_in_modal(page)
+            else:
+                print("\n🏁 No more questions (Next button disabled/gone)")
+                break
+
+        # Close modal when done
+        close_modal(page)
+        browser.close()
+
+    # -------------------------
+    # 4) Save to JSON
+    # -------------------------
+    output_file = os.path.join(OUTPUT_DIR, "questions.json")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(all_questions, f, indent=2, ensure_ascii=False)
+    
+    print(f"\n✅ Done! Saved {len(all_questions)} questions to {output_file}")
+    print(f"   Images saved to {IMAGES_DIR}/")
+    
+    return all_questions
+
+
+if __name__ == "__main__":
+    import sys
+    
+    # Parse CLI argument: python sat_scraper.py [limit]
+    # No argument = run all, with argument = limit to that number
+    limit = None
+    if len(sys.argv) > 1:
+        try:
+            limit = int(sys.argv[1])
+            print(f"🔧 Running with limit: {limit} question(s)")
+        except ValueError:
+            print(f"⚠ Invalid argument '{sys.argv[1]}', running full scrape")
+    
+    questions = run_scraper(
+        assessment="SAT",
+        section="RW",
+        headless=False,
+        max_questions=limit,
+    )
