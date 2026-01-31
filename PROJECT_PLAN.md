@@ -22,43 +22,49 @@ A web application for SAT preparation featuring a visual roadmap/progress tree, 
 
 ### Phase 1: Core (MVP)
 
-- [ ] **Landing Page**
+- [x] **Landing Page**
   - Hero section with value proposition
   - Interactive roadmap preview (clickable → takes to full roadmap)
   - Sign up / Login CTAs
 
-- [ ] **Authentication**
+- [x] **Authentication**
   - Email/password sign up & login
   - OAuth (Google) - optional
   - Protected routes for progress tracking
 
-- [ ] **Roadmap Page**
+- [x] **Roadmap Page**
   - Visual tree/graph showing all domains and skills
-  - Progress indicators for signed-in users
+  - [ ] Progress indicators for signed-in users
   - Click skill → opens worksheet list
 
-- [ ] **Worksheet View**
-  - List of questions for selected skill
-  - Filter by difficulty (Easy/Medium/Hard)
-  - Link to explanation video (YouTube embed or link)
-  - Mark complete functionality
+- [x] **Worksheet View**
+  - Skill overview page with strategy video + worksheet cards
+  - Worksheets grouped by difficulty (Easy/Medium/Hard), ~7 questions each
+  - Individual worksheet pages with question display
+  - Answer feedback + collapsible rationale
+  - [ ] Mark complete functionality (needs progress tracking)
 
-- [ ] **Progress Tracking**
-  - Store completed worksheets per user
+- [ ] **Progress Tracking** (Next Priority)
+  - Store completed questions per user (user_progress table ready)
   - Visual progress on roadmap (filled nodes, percentages)
+  - Mark questions complete functionality
 
-### Phase 2: Test Simulation (Optional)
+### Phase 2: Skill Test Mode
 
-- [ ] **Practice Test Mode**
-  - Timer (32 min for RW module, 35 min for Math module)
+- [ ] **Skill Test Mode**
+  - Tests skills practiced in worksheets (not full SAT modules)
+  - Dynamic timer based on question count:
+    - Reading & Writing: 71 seconds/question
+    - Math: 95 seconds/question
+  - Typical test: ~10 questions per skill
   - Question navigation panel
   - Flag for review functionality
   - Answer selection with A/B/C/D
 
 - [ ] **Results & Review**
-  - Score calculation
+  - Score calculation (% correct)
   - Review incorrect answers with rationale
-  - Save test history
+  - Save test history per skill
 
 ---
 
@@ -112,11 +118,12 @@ create table user_progress (
   unique(user_id, question_id)
 );
 
--- User test attempts (for Phase 2)
+-- User skill test attempts (for Phase 2)
 create table test_attempts (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users not null,
-  section text not null,
+  section text not null,  -- 'Reading and Writing' or 'Math'
+  skill text not null,    -- specific skill being tested
   score int,
   total_questions int,
   time_taken_seconds int,
@@ -152,7 +159,8 @@ satprephelp/
 │   │   └── page.tsx         # Full roadmap view
 │   │
 │   ├── worksheet/
-│   │   └── [skill]/page.tsx # Worksheet for specific skill
+│   │   ├── [skill]/page.tsx           # Skill overview (video + worksheets)
+│   │   └── [skill]/[worksheetId]/page.tsx # Individual worksheet
 │   │
 │   └── practice/            # Phase 2
 │       ├── page.tsx         # Test selection
@@ -234,31 +242,32 @@ npm run seed:questions -- --file=output/SAT_MATH/questions.json
 
 ### M1: Project Setup
 - [x] Plan document
-- [ ] Initialize Next.js project
-- [ ] Configure Supabase
-- [ ] Set up Tailwind
-- [ ] Create database tables
+- [x] Initialize Next.js project
+- [x] Configure Supabase
+- [x] Set up Tailwind
+- [x] Create database tables
 
 ### M2: Auth & Layout
-- [ ] Implement auth flow
-- [ ] Create nav/header component
-- [ ] Protected route middleware
+- [x] Implement auth flow
+- [x] Create nav/header component
+- [x] Protected route middleware
 
 ### M3: Roadmap
-- [ ] Build roadmap visualization
-- [ ] Connect to skills data
+- [x] Build roadmap visualization (static data)
+- [ ] Connect to real question counts from DB
 - [ ] Progress display for logged-in users
 
 ### M4: Worksheets
-- [ ] Worksheet list view
-- [ ] Question display component
+- [x] Skill overview page (video + worksheet cards by difficulty)
+- [x] Individual worksheet pages (~7 questions each)
+- [x] Question display component with answer feedback
+- [x] Seed RW questions (1,590 questions + 120 images)
 - [ ] Mark complete functionality
-- [ ] Seed RW questions
 
-### M5: Test Simulation (Phase 2)
-- [ ] Timer component
+### M5: Skill Test Mode (Phase 2)
+- [ ] Timer component (71s/q R&W, 95s/q Math)
 - [ ] Test-taking UI
-- [ ] Results & review
+- [ ] Results & review per skill
 
 ---
 
