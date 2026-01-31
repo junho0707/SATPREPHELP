@@ -109,11 +109,32 @@ def capture_figures(page: Page, question_id: str, images_dir: str) -> list[str]:
             except Exception as e:
                 print(f"    Figure error: {e}")
 
-        # SVGs not in MathJax, size > 100x100
+        # SVG graphs with role="img" (actual graph figures, NOT MathJax)
+        graph_svgs = prompt.locator('svg[role="img"]')
+        for i in range(graph_svgs.count()):
+            try:
+                svg = graph_svgs.nth(i)
+                # Skip MathJax equation SVGs
+                in_mjx = svg.evaluate("el => !!el.closest('mjx-container')")
+                if in_mjx:
+                    continue
+                filename = f"{question_id}_{index}.png"
+                svg.screenshot(path=os.path.join(images_dir, filename))
+                paths.append(f"images/{filename}")
+                print(f"    Captured graph svg: {filename}")
+                index += 1
+            except Exception as e:
+                print(f"    Graph SVG error: {e}")
+
+        # Other SVGs not in MathJax, size > 100x100
         svgs = prompt.locator("svg")
         for i in range(svgs.count()):
             try:
                 svg = svgs.nth(i)
+                # Skip if already captured (has role="img") or is MathJax
+                has_role = svg.evaluate("el => el.getAttribute('role') === 'img'")
+                if has_role:
+                    continue
                 in_mjx = svg.evaluate("el => !!el.closest('mjx-container')")
                 if in_mjx:
                     continue
@@ -142,6 +163,54 @@ def capture_figures(page: Page, question_id: str, images_dir: str) -> list[str]:
                 index += 1
             except Exception as e:
                 print(f"    Table error: {e}")
+
+    # Check question area (graphs can appear here too)
+    question = page.locator(f"{modal} .question")
+    if question.count() > 0:
+        # SVG graphs with role="img" (NOT MathJax)
+        graph_svgs = question.locator('svg[role="img"]')
+        for i in range(graph_svgs.count()):
+            try:
+                svg = graph_svgs.nth(i)
+                # Skip MathJax equation SVGs
+                in_mjx = svg.evaluate("el => !!el.closest('mjx-container')")
+                if in_mjx:
+                    continue
+                filename = f"{question_id}_{index}.png"
+                svg.screenshot(path=os.path.join(images_dir, filename))
+                paths.append(f"images/{filename}")
+                print(f"    Captured question graph svg: {filename}")
+                index += 1
+            except Exception as e:
+                print(f"    Question graph SVG error: {e}")
+
+        # <figure> elements
+        figures = question.locator("figure")
+        for i in range(figures.count()):
+            try:
+                filename = f"{question_id}_{index}.png"
+                figures.nth(i).screenshot(path=os.path.join(images_dir, filename))
+                paths.append(f"images/{filename}")
+                print(f"    Captured question figure: {filename}")
+                index += 1
+            except Exception as e:
+                print(f"    Question figure error: {e}")
+
+        # Tables
+        tables = question.locator("table")
+        for i in range(tables.count()):
+            try:
+                table = tables.nth(i)
+                in_fig = table.evaluate("el => !!el.closest('figure')")
+                if in_fig:
+                    continue
+                filename = f"{question_id}_{index}.png"
+                table.screenshot(path=os.path.join(images_dir, filename))
+                paths.append(f"images/{filename}")
+                print(f"    Captured question table: {filename}")
+                index += 1
+            except Exception as e:
+                print(f"    Question table error: {e}")
 
     # Check answer choices - only figures and large SVGs
     choices = page.locator(f"{modal} .answer-choices")
